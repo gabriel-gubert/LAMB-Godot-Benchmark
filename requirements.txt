@@ -1,0 +1,9 @@
+langchain
+langchain-openai
+tree-sitter
+tree-sitter-language-pack
+sentence-transformers
+faiss-cpu
+rank-bm25
+pydantic
+rich
