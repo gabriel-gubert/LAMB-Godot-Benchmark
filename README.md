@@ -34,8 +34,8 @@ An automated, containerized pipeline to evaluate GDScript code migration perform
          │ Baseline 1   │          │ Baseline 2        │          │ Baseline 3   │
          │ Zero-Shot    │          │ Hybrid RAG        │          │ LAMB         │
          │ Generation   │          │ (AST+HyDE+RRF+CE) │          │ Framework    │
-         └──────┬───────┘          └─────────┬─────────┘          └──────┬───────┘
-                │                            │                            │
+         └──────┬───────┘          └─────────┬─────────┘          └───────┬──────┘
+                │                            │                            │
                 └────────────────────────────┼────────────────────────────┘
                                              │
                                              ▼
@@ -86,8 +86,8 @@ Before running the benchmark, ensure you have the following installed:
 
 1. **Clone this repository:**
 ```bash
-git clone [https://github.com/gabriel-gubert/godot-migration-benchmark.git](https://github.com/gabriel-gubert/godot-migration-benchmark.git)
-cd godot-migration-benchmark
+git clone [https://github.com/gabriel-gubert/LAMB-Godot-Benchmark.git](https://github.com/gabriel-gubert/LAMB-Godot-Benchmark.git)
+cd LAMB-Godot-Benchmark
 
 ```
 
