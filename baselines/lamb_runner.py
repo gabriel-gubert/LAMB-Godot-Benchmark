@@ -73,11 +73,27 @@ class LambRunner:
         cmd = self._build_command(legacy_path, output_path, report_path)
         logger.info("Running: %s", " ".join(cmd))
 
-        t0 = time.perf_counter()
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300
-        )
-        latency = time.perf_counter() - t0
+        proc = None
+        latency = 0.0
+
+        for attempt in range(3):
+            try:
+                t0 = time.perf_counter()
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=300, check=True
+                )
+                latency = time.perf_counter() - t0
+
+                break
+            except Exception as e:
+                logger.warning(
+                    "Attempt %d/3 failed (%s: %s). Retrying...",
+                    attempt + 1,
+                    type(e).__name__,
+                    e,
+                )
+        else:
+            logger.error("Execution failed after 3 attempts for command: %s", cmd)
 
         generated_code = ""
         if output_path.exists():
@@ -90,7 +106,7 @@ class LambRunner:
             except json.JSONDecodeError:
                 logger.warning("Could not parse LAMB report: %s", report_path)
 
-        if proc.returncode != 0:
+        if proc and proc.returncode != 0:
             logger.error(
                 "lamb migrate failed (rc=%d): %s",
                 proc.returncode,
@@ -100,10 +116,10 @@ class LambRunner:
         return {
             "generated_code": generated_code,
             "latency": latency,
-            "returncode": proc.returncode,
+            "returncode": proc.returncode if proc else "-1",
             "report": report_data,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
+            "stdout": proc.stdout if proc else "",
+            "stderr": proc.stderr if proc else "",
             "confidence": report_data.get("confidence"),
             "tokens": report_data.get("token_usage", {}),
             "audit_records": report_data.get("audit", []),

@@ -222,6 +222,16 @@ class IsomorphismAuditor:
         if extra_critical:
             result.extra_in_target = sorted(str(target_critical[p]) for p in extra_critical)
 
+        # Check casing differences for matched critical files
+        common_critical = set(legacy_critical.keys()) & set(target_critical.keys())
+        for p in sorted(common_critical):
+            legacy_path = legacy_critical[p]
+            target_path = target_critical[p]
+            if str(legacy_path) != str(target_path):
+                result.warnings.append(
+                    f"Casing mismatch in critical file: legacy '{legacy_path}' vs target '{target_path}'"
+                )
+
         # Track non-critical files (.import, .tres, shaders, audio) as non-fatal warnings
         legacy_non_critical = self._collect_paths_case_insensitive(legacy_dir, _NON_CRITICAL_EXTS)
         target_non_critical = self._collect_paths_case_insensitive(target_dir, _NON_CRITICAL_EXTS)
@@ -231,6 +241,16 @@ class IsomorphismAuditor:
 
         for p in sorted(set(target_non_critical.keys()) - set(legacy_non_critical.keys())):
             result.warnings.append(f"Non-critical extra file present in target: {target_non_critical[p]}")
+
+        # Check casing differences for matched non-critical files
+        common_non_critical = set(legacy_non_critical.keys()) & set(target_non_critical.keys())
+        for p in sorted(common_non_critical):
+            legacy_path = legacy_non_critical[p]
+            target_path = target_non_critical[p]
+            if str(legacy_path) != str(target_path):
+                result.warnings.append(
+                    f"Casing mismatch in non-critical file: legacy '{legacy_path}' vs target '{target_path}'"
+                )
 
     @staticmethod
     def _collect_paths_case_insensitive(root: Path, extensions: Set[str]) -> Dict[str, Path]:

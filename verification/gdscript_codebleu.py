@@ -13,13 +13,22 @@ import tree_sitter_language_pack as tslp
 
 logger = logging.getLogger(__name__)
 
-# GDScript Keywords for Weighted N-gram Match
-GDSCRIPT_KEYWORDS: Set[str] = {
-    "extends", "class_name", "func", "var", "const", "signal", "enum", "export",
-    "onready", "static", "return", "if", "elif", "else", "for", "while", "match",
-    "break", "continue", "pass", "await", "super", "self", "in", "is", "as",
-    "void", "int", "float", "bool", "String", "Vector2", "Vector3", "Node", "Object"
-}
+
+def _get_gdscript_keywords() -> Set[str]:
+    """Dynamically extracts keywords and built-in type symbols from GDScript Tree-Sitter grammar."""
+    try:
+        language = tslp.get_language("gdscript")
+        keywords = set()
+        # Tree-sitter modern API uses node_kind instead of node_type
+        for i in range(language.node_kind_count):
+            is_named = language.node_kind_is_named(i)
+            kind_name = language.node_kind_for_id(i)
+            if kind_name and not is_named and kind_name.isalpha():
+                keywords.add(kind_name)
+        return keywords
+    except Exception as exc:
+        logger.warning("Failed to extract GDScript keywords dynamically: %s", exc)
+        return set()
 
 
 def _extract_ast_subtrees(node) -> List[str]:
@@ -81,8 +90,16 @@ def compute_ngram_match(pred_tokens: List[str], ref_tokens: List[str], n: int = 
     return sum(scores) / len(scores) if scores else 0.0
 
 
-def compute_weighted_ngram_match(pred_tokens: List[str], ref_tokens: List[str], n: int = 4) -> float:
+def compute_weighted_ngram_match(
+    pred_tokens: List[str],
+    ref_tokens: List[str],
+    keywords: Set[str] = None,
+    n: int = 4,
+) -> float:
     """Computes keyword-weighted n-gram match score using GDScript keywords."""
+    if keywords is None:
+        keywords = _get_gdscript_keywords()
+
     scores = []
     for i in range(1, n + 1):
         pred_ngrams = [tuple(pred_tokens[j:j+i]) for j in range(len(pred_tokens)-i+1)]
@@ -99,7 +116,7 @@ def compute_weighted_ngram_match(pred_tokens: List[str], ref_tokens: List[str], 
         total_weight = 0.0
 
         for ng, count in pred_counts.items():
-            weight = 5.0 if any(tok in GDSCRIPT_KEYWORDS for tok in ng) else 1.0
+            weight = 5.0 if any(tok in keywords for tok in ng) else 1.0
             matched = min(count, ref_counts[ng])
             weighted_overlap += matched * weight
             total_weight += count * weight
@@ -127,8 +144,10 @@ def calc_gdscript_codebleu(
     pred_tokens = pred_code.split()
     ref_tokens = ref_code.split()
 
+    keywords = _get_gdscript_keywords()
+
     ngram_score = compute_ngram_match(pred_tokens, ref_tokens)
-    weighted_ngram_score = compute_weighted_ngram_match(pred_tokens, ref_tokens)
+    weighted_ngram_score = compute_weighted_ngram_match(pred_tokens, ref_tokens, keywords=keywords)
     ast_match_score = compute_gdscript_ast_match(pred_code, ref_code)
 
     # Re-normalize weights across the 3 calculated sub-components

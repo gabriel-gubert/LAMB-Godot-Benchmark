@@ -6,14 +6,15 @@ This orchestrator coordinates the complete end-to-end benchmark workflow:
    - Downloads legacy (3.x) and target (4.x) demo projects.
    - Executes graph-based isomorphism auditing on .tscn files and case-insensitive path checks.
    - Routes projects into mutually exclusive folders:
-     * PASS -> dataset/audited_passed
+     * PASS -> dataset/audited
      * REVIEW -> dataset/require_manual_review
      * FAIL -> Excluded from benchmark (detailed in audit_report.json)
 
 2. Action 2 (action_run_baselines):
    - Copies full target project directory structures to output_dir upfront across all requested paradigms.
-   - Executes automated migration paradigms (Zero-Shot, Hybrid RAG, LAMB) across project pairs.
+   - Executes automated migration paradigms (Zero-Shot, Standard RAG, Hybrid RAG, LAMB) across project pairs.
    - Persists migrated project directory trees cleanly to disk in output_dir.
+   - Exports migration metadata records to migration_records_<PARADIGMS>.json.
 
 3. Action 3 (action_evaluate):
    - Runs static code analysis (AST edit distance, syntax verification, CodeBLEU).
@@ -85,7 +86,7 @@ def action_audit_dataset(
     full_audit_report: List[Dict[str, Any]] = []
 
     # Define clean destination root folders for routed projects
-    audited_passed_dir = dataset_dir / "audited_passed"
+    audited_passed_dir = dataset_dir / "audited"
     review_dir = dataset_dir / "require_manual_review"
 
     # Wipe existing audited directories if force re-download is requested
@@ -254,7 +255,7 @@ def action_audit_dataset(
 
     console.print(
         f"[bold green]Audit Summary:[bold green] Retained [cyan]{passed_projects}[/cyan] passed projects "
-        f"([dim]{passed_script_pairs} script pairs[/dim]) in [dim]audited_passed/[/dim] and "
+        f"([dim]{passed_script_pairs} script pairs[/dim]) in [dim]audited/[/dim] and "
         f"[yellow]{review_projects}[/yellow] projects ([dim]{review_script_pairs} script pairs[/dim]) "
         f"in [dim]require_manual_review/[/dim]. [red]{failed_projects}[/red] projects failed."
     )
@@ -264,54 +265,67 @@ def load_existing_audited_pairs(dataset_dir: Path) -> List[Dict[str, Any]]:
     """Loads existing audited project script pairs directly from disk without re-running the auditor."""
     valid_pairs: List[Dict[str, Any]] = []
     
-    for base_folder in ["audited_passed", "require_manual_review"]:
-        base_dir = dataset_dir / base_folder
-        legacy_base = base_dir / "legacy"
-        target_base = base_dir / "target"
-        
-        if not legacy_base.exists() or not target_base.exists():
+    base_dir = dataset_dir / "audited"
+    legacy_base = base_dir / "legacy"
+    target_base = base_dir / "target"
+    
+    if not legacy_base.exists() or not target_base.exists():
+        return []
+
+    legacy_projects: Dict[Path, Path] = {}
+
+    for godot_file in legacy_base.rglob("project.godot"):
+        legacy_project_dir = godot_file.parent
+        legacy_rel = legacy_project_dir.relative_to(legacy_base)
+        legacy_projects[legacy_rel] = legacy_project_dir
+
+    for legacy_proj_name, legacy_proj_dir in legacy_projects.items():
+        if not legacy_proj_dir.is_dir():
             continue
 
-        is_review = (base_folder == "require_manual_review")
+        proj_name = legacy_proj_name
+        target_proj_dir = target_base / proj_name
 
-        # Exclude review projects if configured to run passed projects only
-        if is_review and not REQUIRE_REVIEW_EVALUATION:
+        if not target_proj_dir.exists():
             continue
 
-        legacy_projects: Dict[Path, Path] = {}
+        # Collect matching GDScript pairs
+        for legacy_gd_file in legacy_proj_dir.rglob("*.gd"):
+            rel_path = legacy_gd_file.relative_to(legacy_proj_dir)
+            target_gd_file = target_proj_dir / rel_path
 
-        for godot_file in legacy_base.rglob("project.godot"):
-            legacy_project_dir = godot_file.parent
-            legacy_rel = legacy_project_dir.relative_to(legacy_base)
-            legacy_projects[legacy_rel] = legacy_project_dir
-
-        for legacy_proj_name, legacy_proj_dir in legacy_projects.items():
-            if not legacy_proj_dir.is_dir():
-                continue
-
-            proj_name = legacy_proj_name
-            target_proj_dir = target_base / proj_name
-
-            if not target_proj_dir.exists():
-                continue
-
-            # Collect matching GDScript pairs
-            for legacy_gd_file in legacy_proj_dir.rglob("*.gd"):
-                rel_path = legacy_gd_file.relative_to(legacy_proj_dir)
-                target_gd_file = target_proj_dir / rel_path
-
-                if target_gd_file.exists():
-                    valid_pairs.append({
-                        "project_name": str(proj_name),
-                        "legacy_project_dir": legacy_proj_dir,
-                        "target_project_dir": target_proj_dir,
-                        "relative_script_path": rel_path,
-                        "legacy_script_path": legacy_gd_file,
-                        "target_script_path": target_gd_file,
-                        "flagged_for_review": is_review,
-                    })
+            if target_gd_file.exists():
+                valid_pairs.append({
+                    "project_name": str(proj_name),
+                    "legacy_project_dir": legacy_proj_dir,
+                    "target_project_dir": target_proj_dir,
+                    "relative_script_path": rel_path,
+                    "legacy_script_path": legacy_gd_file,
+                    "target_script_path": target_gd_file,
+                    "flagged_for_review": False,
+                })
 
     return valid_pairs
+
+
+def load_migration_records(records_path: Path) -> List[Dict[str, Any]]:
+    """Loads migration records from a JSON file and restores Path objects."""
+    if not records_path.exists():
+        return []
+    
+    raw_data = json.loads(records_path.read_text())
+    loaded_records: List[Dict[str, Any]] = []
+
+    for item in raw_data:
+        record = dict(item)
+        record["migrated_file_path"] = Path(record["migrated_file_path"])
+        record["migrated_project_dir"] = Path(record["migrated_project_dir"])
+        record["target_script_path"] = Path(record["target_script_path"])
+        record["target_project_dir"] = Path(record["target_project_dir"])
+        loaded_records.append(record)
+
+    return loaded_records
+
 
 # ----------------------------------------------------------------------
 # Action 2: Baseline & Framework Migration Execution
@@ -423,6 +437,24 @@ def action_run_baselines(
                 "symbols_extracted": res_data.get("symbols_extracted", []),
                 "retrieved_chunk_hashes": res_data.get("retrieved_chunk_hashes", []),
             })
+
+    # Save migration records to JSON file
+    records_output_path = (
+        RESULTS_DIR / f"{'_'.join(['migration_records'] + list(paradigms))}.json"
+    )
+    records_output_path.parent.mkdir(parents=True, exist_ok=True)
+    serializable_records = [
+        {
+            **rec,
+            "migrated_file_path": str(rec["migrated_file_path"]),
+            "migrated_project_dir": str(rec["migrated_project_dir"]),
+            "target_script_path": str(rec["target_script_path"]),
+            "target_project_dir": str(rec["target_project_dir"]),
+        }
+        for rec in migration_records
+    ]
+    records_output_path.write_text(json.dumps(serializable_records, indent=2))
+    console.print(f"[bold green]Migration records saved to {records_output_path}[/bold green]")
 
     # Export audit JSON if hybrid-rag was executed
     rag_records = [r for r in migration_records if r["paradigm"] == "hybrid-rag"]
@@ -735,20 +767,47 @@ def main():
 
     # Step 2 & 3: Baseline execution & Containerized evaluation
     migration_records = []
-    if args.run_baselines or args.evaluate or run_all:
-        selected_paradigms = (
-            ["zero-shot", "standard-rag", "hybrid-rag", "lamb"]
-            if args.paradigm == "all"
-            else [args.paradigm]
+    selected_paradigms = (
+        ["zero-shot", "standard-rag", "hybrid-rag", "lamb"]
+        if args.paradigm == "all"
+        else [args.paradigm]
+    )
+
+    if args.run_baselines or run_all:
+        migration_records = action_run_baselines(
+            paradigms=selected_paradigms,
+            valid_pairs=valid_pairs,
+            output_dir=OUTPUT_DIR,
         )
-        if args.run_baselines or run_all:
-            migration_records = action_run_baselines(
-                paradigms=selected_paradigms,
-                valid_pairs=valid_pairs,
-                output_dir=OUTPUT_DIR,
-            )
+    elif args.evaluate:
+        target_json_files = [
+            "migration_records_zero-shot.json",
+            "migration_records_standard-rag.json",
+            "migration_records_hybrid-rag.json",
+            "migration_records_lamb.json",
+            "migration_records_zero-shot_standard-rag_hybrid-rag_lamb.json",
+        ]
+
+        loaded_records = []
+        found_files = []
+
+        for fname in target_json_files:
+            records_json_path = RESULTS_DIR / fname
+            if records_json_path.exists():
+                found_files.append(str(records_json_path))
+                file_records = load_migration_records(records_json_path)
+                loaded_records.extend(file_records)
+
+        if loaded_records:
+            console.print(f"\n[bold yellow]Loading migration records from found JSON files: {', '.join(found_files)}...[/bold yellow]")
+            # Filter by selected paradigm if not 'all'
+            if args.paradigm != "all":
+                migration_records = [r for r in loaded_records if r["paradigm"] in selected_paradigms]
+            else:
+                migration_records = loaded_records
+            console.print(f"[bold green]Loaded {len(migration_records)} migration records from JSON.[/bold green]")
         else:
-            # Reconstruct migration records from existing output directories for standalone evaluation
+            console.print("\n[bold yellow]No matching migration records JSON files found. Falling back to output directory reconstruction...[/bold yellow]")
             for p_name in selected_paradigms:
                 for item in valid_pairs:
                     migrated_proj_dir = OUTPUT_DIR / p_name / item["project_name"]
