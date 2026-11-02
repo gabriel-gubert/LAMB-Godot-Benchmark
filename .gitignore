@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# LAMB
+.lambconfig.toml
+
+# Project-related
+dataset/repos
+output/
+results/
