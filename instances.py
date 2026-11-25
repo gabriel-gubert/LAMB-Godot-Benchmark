@@ -3,7 +3,7 @@
 Developers should configure API keys, model names, and base URLs here.
 """
 
-from lamb.rate_limited_chat import RateLimitedChatOpenAI, RateLimitedOpenAIEmbeddings
+from lamb.llm.rate_limited import RateLimitedChatOpenAI, RateLimitedOpenAIEmbeddings
 
 
 chat_model = RateLimitedChatOpenAI(
